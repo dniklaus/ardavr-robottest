@@ -47,9 +47,19 @@
 			<locationURI>ArdAvr_RobotTestTimer/Timer</locationURI>
 		</link>
 		<link>
+			<name>UltrasonicRanging</name>
+			<type>2</type>
+			<locationURI>ArdAvr_RobotTestUltrasonicRanging/UltrasonicRanging</locationURI>
+		</link>
+		<link>
 			<name>Libraries/LiquidCrystal</name>
 			<type>2</type>
 			<locationURI>ArduinoLibPath/LiquidCrystal</locationURI>
+		</link>
+		<link>
+			<name>Libraries/NewPing</name>
+			<type>2</type>
+			<locationURI>ArduinoLibPath/NewPing</locationURI>
 		</link>
 		<link>
 			<name>arduino/core</name>
