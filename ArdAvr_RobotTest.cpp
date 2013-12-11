@@ -11,6 +11,7 @@
 #include "UltrasonicSensor.h"
 #include "UltrasonicSensorHCSR04.h"
 #include "EEPROM.h"
+#include "PID_v1.h"
 
 #include <avr/power.h>
 #include <avr/sleep.h>
@@ -23,6 +24,8 @@ Timer*            speedSensorReadTimer;
 Timer*            displayTimer;
 Timer*            speedCtrlTimer;
 Blanking*         displayBlanking;
+PID*              pidLeft = 0;
+PID*              pidRight = 0;
 
 bool isRunning = false;
 bool isIvmAccessMode = false;
@@ -80,22 +83,50 @@ const int R_SPEED_SENS_IRQ = IRQ_PIN_21;
 volatile unsigned long int speedSensorCountLeft  = 0;
 volatile unsigned long int speedSensorCountRight = 0;
 
-volatile long int leftWheelSpeed  = 0;
-volatile long int rightWheelSpeed = 0;
+ double leftWheelSpeed  = 0.0;
+ double rightWheelSpeed = 0.0;
+
+const double PID_KP = 1;
+const double PID_KI = 100;
+const double PID_KD = 1;
+
+double leftWheelOutput = 0;
+double rightWheelOutput = 0;
+
+double leftWheelSetPoint = 0;
+double rightWheelSetPoint = 0;
 
 void readSpeedSensors()
 {
   noInterrupts();
   rightWheelSpeed = speedSensorCountRight; speedSensorCountRight = 0;
   leftWheelSpeed  = speedSensorCountLeft;  speedSensorCountLeft  = 0;
+  Serial.println(rightWheelSpeed);
+  Serial.println(leftWheelSpeed);
   interrupts();
 }
+
+void controlSpeed()
+{
+  Serial.println(pidLeft->Compute());
+  Serial.println(pidRight->Compute());
+
+  Serial.println((int)(leftWheelOutput ));
+  Serial.println((int)(rightWheelOutput ));
+  Serial.println();
+
+
+  motorL->setSpeed((int)(leftWheelOutput * 10.0));
+  motorR->setSpeed((int)(rightWheelOutput * 10.0));
+}
+
 
 class SpeedSensorReadTimerAdapter : public TimerAdapter
 {
   void timeExpired()
   {
     readSpeedSensors();
+    controlSpeed();
   }
 };
 
@@ -173,7 +204,20 @@ void countRightSpeedSensor()
 //The setup function is called once at startup of the sketch
 void setup()
 {
+  Serial.begin(115200);
+
+  leftWheelOutput = 0;
+  rightWheelOutput = 0;
+
+  leftWheelSetPoint = 15;
+  rightWheelSetPoint = 15;
+
   ultrasonicSensorFront = new UltrasonicSensorHCSR04(triggerPin, echoPin);
+
+  pidLeft  = new PID(&leftWheelSpeed, &leftWheelOutput, &leftWheelSetPoint, PID_KP, PID_KI, PID_KD,  DIRECT);
+  pidLeft->SetMode(AUTOMATIC);
+  pidRight = new PID(&rightWheelSpeed, &rightWheelOutput, &rightWheelSetPoint, PID_KP, PID_KI, PID_KD,  DIRECT);
+  pidRight->SetMode(AUTOMATIC);
 
   speedSensorReadTimer  = new Timer(new SpeedSensorReadTimerAdapter(), Timer::IS_RECURRING, SPEED_SENSORS_READ_TIMER_INTVL_MILLIS);
 
@@ -185,13 +229,14 @@ void setup()
 
   displayTimer = new Timer(new DisplayTimerAdapter(), Timer::IS_RECURRING, 200);
 
-  speedCtrlTimer = new Timer(new SpeedCtrlTimerAdapter(), Timer::IS_RECURRING, 200);
+  //speedCtrlTimer = new Timer(new SpeedCtrlTimerAdapter(), Timer::IS_RECURRING, 200);
 
   displayBlanking = new Blanking();
 
   lcdKeypad.setBackLightIntensity(lcdBackLightIntensity);
 
   updateBattVoltageSenseFactor();
+
 }
 
 void selectMode()
@@ -390,12 +435,7 @@ void updateDisplay()
 
 void updateActors()
 {
-  int speedAndDirection = speed_value_motor * (isFwd ? 1 : -1);
 
-  long int deltaSpeed = rightWheelSpeed - leftWheelSpeed;
-
-  motorL->setSpeed(speedAndDirection + deltaSpeed/5);
-  motorR->setSpeed(speedAndDirection - deltaSpeed/5);
 }
 
 // The loop function is called in an endless loop

@@ -47,6 +47,11 @@
 			<locationURI>ArdAvr_RobotTestMotorPWM/MotorPWM</locationURI>
 		</link>
 		<link>
+			<name>PID_v1</name>
+			<type>2</type>
+			<locationURI>ArdAvr_RobotTestPID_v1/PID_v1</locationURI>
+		</link>
+		<link>
 			<name>Timer</name>
 			<type>2</type>
 			<locationURI>ArdAvr_RobotTestTimer/Timer</locationURI>
