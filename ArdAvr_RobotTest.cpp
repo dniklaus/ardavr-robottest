@@ -2,19 +2,31 @@
 #include "ArdAvr_RobotTest.h"
 
 #include "LcdKeypad.h"
+#include "Blanking.h"
 #include "TimerContext.h"
+#include "Timer.h"
+#include "TimerAdapter.h"
 #include "SN754410Driver.h"
 #include "MotorPWM.h"
 #include "UltrasonicSensor.h"
 #include "UltrasonicSensorHCSR04.h"
+#include "EEPROM.h"
+
+#include <avr/power.h>
+#include <avr/sleep.h>
 
 LcdKeypad lcdKeypad;
-MotorPWM* motorL;
-MotorPWM* motorR;
+MotorPWM*         motorL;
+MotorPWM*         motorR;
 UltrasonicSensor* ultrasonicSensorFront;
-
+Timer*            speedSensorReadTimer;
+Timer*            displayTimer;
+Timer*            speedCtrlTimer;
+Blanking*         displayBlanking;
 
 bool isRunning = false;
+bool isIvmAccessMode = false;
+bool isIvmRobotIdEditMode = false;
 
 // H-bridge enable pin for speed control
 int speedPin1 = 44;
@@ -37,70 +49,269 @@ bool isObstacleDetected = false;
 // LCD Backlight Intensity
 int lcdBackLightIntensity = 100;
 
-
 // Ultrasonic Sensor
-unsigned int triggerPin = 34;
-unsigned int echoPin    = 36;
-unsigned long dist      = 0;   // [cm]
+unsigned int triggerPin  = 34;
+unsigned int echoPin     = 36;
+unsigned long dist       = UltrasonicSensor::DISTANCE_LIMIT_EXCEEDED;   // [cm]
+
+// Battery Voltage Surveillance
+float    battVoltage     = 0;   // [100mv]
+
+const int BATT_SENSE_PIN     = A9;
+const float BATT_WARN_THRSHD = 6.20;
+const float BATT_SENS_FACTOR_1 = 2.0;
+const float BATT_SENS_FACTOR_2 = 2.488;
+const float BATT_SENS_FACTOR_3 = 2.550;
+const float BATT_SENS_FACTOR_4 = 2.091;
+const float BATT_SENS_FACTOR_5 = 2.456;
+float BATT_SENS_FACTOR = 2.0;
+
+// Wheel Speed Sensors
+const unsigned int SPEED_SENSORS_READ_TIMER_INTVL_MILLIS = 100;
+
+const int IRQ_PIN_18 = 5;
+const int IRQ_PIN_19 = 4;
+const int IRQ_PIN_20 = 3;
+const int IRQ_PIN_21 = 2;
+
+const int L_SPEED_SENS_IRQ = IRQ_PIN_20;
+const int R_SPEED_SENS_IRQ = IRQ_PIN_21;
+
+volatile unsigned long int speedSensorCountLeft  = 0;
+volatile unsigned long int speedSensorCountRight = 0;
+
+volatile long int leftWheelSpeed  = 0;
+volatile long int rightWheelSpeed = 0;
+
+void readSpeedSensors()
+{
+  noInterrupts();
+  rightWheelSpeed = speedSensorCountRight; speedSensorCountRight = 0;
+  leftWheelSpeed  = speedSensorCountLeft;  speedSensorCountLeft  = 0;
+  interrupts();
+}
+
+class SpeedSensorReadTimerAdapter : public TimerAdapter
+{
+  void timeExpired()
+  {
+    readSpeedSensors();
+  }
+};
+
+void selectMode();
+void speedControl();
+void updateActors();
+
+class SpeedCtrlTimerAdapter : public TimerAdapter
+{
+  void timeExpired()
+  {
+    speedControl();
+    updateActors();
+  }
+};
+
+void updateBattVoltageSenseFactor()
+{
+  unsigned char robotId = EEPROM.read(0);
+  switch (robotId)
+  {
+    case 1:
+      BATT_SENS_FACTOR = BATT_SENS_FACTOR_1;
+      break;
+    case 2:
+      BATT_SENS_FACTOR = BATT_SENS_FACTOR_2;
+      break;
+    case 3:
+      BATT_SENS_FACTOR = BATT_SENS_FACTOR_3;
+      break;
+    case 4:
+      BATT_SENS_FACTOR = BATT_SENS_FACTOR_4;
+      break;
+    case 5:
+      BATT_SENS_FACTOR = BATT_SENS_FACTOR_5;
+      break;
+    default:
+      BATT_SENS_FACTOR = 2.0;
+  }
+}
+
+void readBattVoltage()
+{
+  unsigned int rawBattVoltage = analogRead(BATT_SENSE_PIN);
+  battVoltage = rawBattVoltage * BATT_SENS_FACTOR * 5 / 1023;
+}
+
+
+void updateDisplay();
+
+class DisplayTimerAdapter : public TimerAdapter
+{
+  void timeExpired()
+  {
+    readBattVoltage();
+    selectMode();
+    updateDisplay();
+  }
+};
+
+void countLeftSpeedSensor()
+{
+  noInterrupts();
+  speedSensorCountLeft++;
+  interrupts();
+}
+
+void countRightSpeedSensor()
+{
+  noInterrupts();
+  speedSensorCountRight++;
+  interrupts();
+}
 
 //The setup function is called once at startup of the sketch
 void setup()
 {
   ultrasonicSensorFront = new UltrasonicSensorHCSR04(triggerPin, echoPin);
 
+  speedSensorReadTimer  = new Timer(new SpeedSensorReadTimerAdapter(), Timer::IS_RECURRING, SPEED_SENSORS_READ_TIMER_INTVL_MILLIS);
+
+  attachInterrupt(L_SPEED_SENS_IRQ, countLeftSpeedSensor,  RISING);
+  attachInterrupt(R_SPEED_SENS_IRQ, countRightSpeedSensor, RISING);
+
   motorL = new SN754410_Driver(speedPin1, motor1APin, motor2APin);
   motorR = new SN754410_Driver(speedPin2, motor3APin, motor4APin);
 
+  displayTimer = new Timer(new DisplayTimerAdapter(), Timer::IS_RECURRING, 200);
+
+  speedCtrlTimer = new Timer(new SpeedCtrlTimerAdapter(), Timer::IS_RECURRING, 200);
+
+  displayBlanking = new Blanking();
+
   lcdKeypad.setBackLightIntensity(lcdBackLightIntensity);
+
+  updateBattVoltageSenseFactor();
+}
+
+void selectMode()
+{
+  if (!isRunning)
+  {
+    if (lcdKeypad.isSelectKey())
+    {
+      isIvmAccessMode = true;
+    }
+    else if (!isIvmRobotIdEditMode && lcdKeypad.isRightKey())
+    {
+      isIvmAccessMode = false;
+    }
+
+    if (isIvmAccessMode)
+    {
+      if (lcdKeypad.isLeftKey())
+      {
+        isIvmRobotIdEditMode = true;
+      }
+    }
+
+    if (isIvmRobotIdEditMode)
+    {
+      unsigned char robotId = EEPROM.read(0);
+
+      if (lcdKeypad.isSelectKey())
+      {
+        isIvmRobotIdEditMode = false;
+      }
+      if (lcdKeypad.isUpKey())
+      {
+        robotId++;
+        EEPROM.write(0, robotId);
+        updateBattVoltageSenseFactor();
+      }
+      if (lcdKeypad.isDownKey())
+      {
+        robotId--;
+        EEPROM.write(0, robotId);
+        updateBattVoltageSenseFactor();
+      }
+    }
+  }
 }
 
 void speedControl()
 {
-  dist = ultrasonicSensorFront->getDistanceCM();
-  isObstacleDetected = isFwd && (dist > 0) && (dist < 10);
+  if (0 != ultrasonicSensorFront)
+  {
+    dist = ultrasonicSensorFront->getDistanceCM();
+  }
+  isObstacleDetected = isFwd && (dist > 0) && (dist < 15);
 
-  if (lcdKeypad.isRightKey())
+  if (lcdKeypad.isRightKey() || isObstacleDetected)
   {
     isRunning = false;
   }
-  else if (lcdKeypad.isLeftKey())
+  else if (lcdKeypad.isLeftKey() && !isIvmAccessMode)
   {
     isRunning = true;
   }
 
   if (isRunning)
   {
-    if ((speed_value_motor == 255) || isObstacleDetected)
-    {
-      isSpeedIncreasing = false;
-    }
-    else if (speed_value_motor == 0)
-    {
-      isSpeedIncreasing = true;
-      isFwd = !isFwd;
-    }
-    if (isSpeedIncreasing && (speed_value_motor < 255))
-    {
-      speed_value_motor++;
-    }
-    else if ((speed_value_motor > 0))
-    {
-      speed_value_motor--;
-    }
+    speed_value_motor = 255;
+//    if ((speed_value_motor == 255))
+//    {
+//      isSpeedIncreasing = false;
+//    }
+//    else if (speed_value_motor == 0)
+//    {
+//      isSpeedIncreasing = true;
+//      isFwd = !isFwd;
+//    }
+//
+//    int speedDelta = 50;
+//
+//    if (isSpeedIncreasing)
+//    {
+//      if (speed_value_motor <= (255 - speedDelta))
+//      {
+//        speed_value_motor += speedDelta;
+//      }
+//      else if (speed_value_motor < 255)
+//      {
+//        speed_value_motor++;
+//      }
+//    }
+//    else
+//    {
+//      if ((speed_value_motor >= speedDelta))
+//      {
+//        speed_value_motor -= speedDelta;
+//      }
+//      else if (speed_value_motor > 0)
+//      {
+//        speed_value_motor--;
+//      }
+//    }
   }
   else
   {
-    if (speed_value_motor > 0)
-    {
-      if (isObstacleDetected)
-      {
-        speed_value_motor -= 4;
-      }
-      else
-      {
-        speed_value_motor--;
-      }
-    }
+    speed_value_motor = 0;
+//    if (speed_value_motor > 0)
+//    {
+//      if (isObstacleDetected)
+//      {
+//        speed_value_motor = 0;
+//      }
+//      else if (speed_value_motor > 10)
+//      {
+//        speed_value_motor -= 10;
+//      }
+//      else
+//      {
+//        speed_value_motor--;
+//      }
+//    }
   }
 }
 
@@ -121,42 +332,75 @@ void lcdBackLightControl()
 void updateDisplay()
 {
   lcdKeypad.setCursor(0, 0);
-//  lcdKeypad.print("in: ");
-//  lcdKeypad.print(lcdKeypad.isNoKey()     ? "NO_KEY    " :
-//                  lcdKeypad.isUpKey()     ? "UP_KEY    " :
-//                  lcdKeypad.isDownKey()   ? "DOWN_KEY  " :
-//                  lcdKeypad.isLeftKey()   ? "LEFT_KEY  " :
-//                  lcdKeypad.isRightKey()  ? "RIGHT_KEY " :
-//                  lcdKeypad.isSelectKey() ? "SELECT_KEY" : "----------");
-  lcdKeypad.print("Dist:  ");
-  lcdKeypad.print(dist > 99 ? "" : dist > 9 ? " " : "  ");
-  lcdKeypad.print(dist);
-  lcdKeypad.print(" [cm]");
 
-  lcdKeypad.setCursor(0, 1);
-  lcdKeypad.print("Speed: ");
-  lcdKeypad.print(speed_value_motor > 99 ? "" : speed_value_motor > 9 ? " " : "  ");
-  lcdKeypad.print(speed_value_motor);
-  lcdKeypad.setCursor(11, 1);
-  lcdKeypad.print(isRunning ? (isFwd ? "[FWD]" : "[REV]") : "[---]");
+  if (isIvmAccessMode)
+  {
+    lcdKeypad.print("IVM Data");
+    lcdKeypad.print("        ");
+
+    lcdKeypad.setCursor(0, 1);
+
+    lcdKeypad.print("Robot ID: ");
+
+    if (isIvmRobotIdEditMode && displayBlanking->isSignalBlanked())
+    {
+      lcdKeypad.print("      ");
+    }
+    else
+    {
+      lcdKeypad.print(EEPROM.read(0));
+    }
+    lcdKeypad.print("     ");
+  }
+  else
+  {
+    lcdKeypad.print("Dst:");
+    if (dist == UltrasonicSensor::DISTANCE_LIMIT_EXCEEDED)
+    {
+      lcdKeypad.print("infin ");
+    }
+    else
+    {
+      lcdKeypad.print(dist > 99 ? "" : dist > 9 ? " " : "  ");
+      lcdKeypad.print(dist);
+      lcdKeypad.print("cm ");
+    }
+
+    if (displayBlanking->isSignalBlanked() && (battVoltage < BATT_WARN_THRSHD))
+    {
+      lcdKeypad.print("      ");
+    }
+    else
+    {
+      lcdKeypad.print("B:");
+      lcdKeypad.print(battVoltage);
+      lcdKeypad.print("[V]");
+    }
+
+    lcdKeypad.setCursor(0, 1);
+    lcdKeypad.print("v ");
+    lcdKeypad.print("l:");
+    lcdKeypad.print(leftWheelSpeed > 999 ? "" : leftWheelSpeed > 99 ? " " : leftWheelSpeed > 9 ? "  " : "   ");
+    lcdKeypad.print(leftWheelSpeed);
+    lcdKeypad.print(" r:");
+    lcdKeypad.print(rightWheelSpeed > 999 ? "" : rightWheelSpeed > 99 ? " " : rightWheelSpeed > 9 ? "  " : "   ");
+    lcdKeypad.print(rightWheelSpeed);
+  }
 }
 
 void updateActors()
 {
   int speedAndDirection = speed_value_motor * (isFwd ? 1 : -1);
-  motorL->setSpeed(speedAndDirection);
-  motorR->setSpeed(speedAndDirection);
+
+  long int deltaSpeed = rightWheelSpeed - leftWheelSpeed;
+
+  motorL->setSpeed(speedAndDirection + deltaSpeed/5);
+  motorR->setSpeed(speedAndDirection - deltaSpeed/5);
 }
 
 // The loop function is called in an endless loop
 void loop()
 {
   TimerContext::instance()->handleTick();
-
   lcdBackLightControl();
-  speedControl();
-  updateDisplay();
-  updateActors();
-
-  delay(0);
 }

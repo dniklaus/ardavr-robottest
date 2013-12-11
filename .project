@@ -27,6 +27,11 @@
 	</natures>
 	<linkedResources>
 		<link>
+			<name>Blanking</name>
+			<type>2</type>
+			<locationURI>ArdAvr_RobotTestBlanking/Blanking</locationURI>
+		</link>
+		<link>
 			<name>Debounce</name>
 			<type>2</type>
 			<locationURI>ArdAvr_RobotTestDebounce/Debounce</locationURI>
@@ -50,6 +55,11 @@
 			<name>UltrasonicRanging</name>
 			<type>2</type>
 			<locationURI>ArdAvr_RobotTestUltrasonicRanging/UltrasonicRanging</locationURI>
+		</link>
+		<link>
+			<name>Libraries/EEPROM</name>
+			<type>2</type>
+			<locationURI>ArduinoHardwareLibPath/EEPROM</locationURI>
 		</link>
 		<link>
 			<name>Libraries/LiquidCrystal</name>
