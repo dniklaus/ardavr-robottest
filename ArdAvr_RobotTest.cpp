@@ -60,9 +60,9 @@ float    battVoltage     = 0;   // [100mv]
 const int BATT_SENSE_PIN     = A9;
 const float BATT_WARN_THRSHD = 6.20;
 const float BATT_SENS_FACTOR_1 = 2.0;
-const float BATT_SENS_FACTOR_2 = 2.488;
-const float BATT_SENS_FACTOR_3 = 2.550;
-const float BATT_SENS_FACTOR_4 = 2.091;
+const float BATT_SENS_FACTOR_2 = 2.450;
+const float BATT_SENS_FACTOR_3 = 2.530;
+const float BATT_SENS_FACTOR_4 = 2.000;
 const float BATT_SENS_FACTOR_5 = 2.456;
 float BATT_SENS_FACTOR = 2.0;
 
