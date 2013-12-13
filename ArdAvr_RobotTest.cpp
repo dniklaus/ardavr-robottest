@@ -22,7 +22,7 @@ MotorPWM*         motorR;
 UltrasonicSensor* ultrasonicSensorFront;
 Timer*            speedSensorReadTimer;
 Timer*            displayTimer;
-Timer*            speedCtrlTimer;
+Timer*            speedSetPointCtrlTimer;
 Blanking*         displayBlanking;
 PID*              pidLeft = 0;
 PID*              pidRight = 0;
@@ -43,10 +43,12 @@ int motor3APin = 47;
 int motor2APin = 48;
 int motor4APin = 49;
 
-// value for motor speed
-int speed_value_motor = 0;
-bool isSpeedIncreasing = true;
+// Speed Set Point (Führungsgrösse für die Geschwindigkeit); full speed corresponds to 25
+int driveSrtaitSpeedSetPoint = 0;
+const int RUNNING_SPEED = 16;
+
 bool isFwd = true;
+
 bool isObstacleDetected = false;
 
 // LCD Backlight Intensity
@@ -63,9 +65,9 @@ float    battVoltage     = 0;   // [100mv]
 const int BATT_SENSE_PIN     = A9;
 const float BATT_WARN_THRSHD = 6.20;
 const float BATT_SENS_FACTOR_1 = 2.0;
-const float BATT_SENS_FACTOR_2 = 2.488;
-const float BATT_SENS_FACTOR_3 = 2.550;
-const float BATT_SENS_FACTOR_4 = 2.091;
+const float BATT_SENS_FACTOR_2 = 2.450;
+const float BATT_SENS_FACTOR_3 = 2.530;
+const float BATT_SENS_FACTOR_4 = 2.000;
 const float BATT_SENS_FACTOR_5 = 2.456;
 float BATT_SENS_FACTOR = 2.0;
 
@@ -83,16 +85,19 @@ const int R_SPEED_SENS_IRQ = IRQ_PIN_21;
 volatile unsigned long int speedSensorCountLeft  = 0;
 volatile unsigned long int speedSensorCountRight = 0;
 
- double leftWheelSpeed  = 0.0;
- double rightWheelSpeed = 0.0;
+double leftWheelSpeed  = 0.0;
+double rightWheelSpeed = 0.0;
 
+// PID parameters
 const double PID_KP = 1;
 const double PID_KI = 100;
 const double PID_KD = 1;
 
+// PID controller outputs
 double leftWheelOutput = 0;
 double rightWheelOutput = 0;
 
+// PID Controller Set Points for speed
 double leftWheelSetPoint = 0;
 double rightWheelSetPoint = 0;
 
@@ -106,18 +111,29 @@ void readSpeedSensors()
   interrupts();
 }
 
-void controlSpeed()
+void processStateControl()
 {
+  leftWheelSetPoint  = driveSrtaitSpeedSetPoint * 1.0;
+  rightWheelSetPoint = driveSrtaitSpeedSetPoint * 1.0;
+
   Serial.println(pidLeft->Compute());
   Serial.println(pidRight->Compute());
 
-  Serial.println((int)(leftWheelOutput ));
-  Serial.println((int)(rightWheelOutput ));
+  Serial.println((int)(leftWheelOutput));
+  Serial.println((int)(rightWheelOutput));
   Serial.println();
 
-
-  motorL->setSpeed((int)(leftWheelOutput * 10.0));
-  motorR->setSpeed((int)(rightWheelOutput * 10.0));
+  // emergency stop :-)
+  if (0 == driveSrtaitSpeedSetPoint)
+  {
+    motorL->setSpeed(0);
+    motorR->setSpeed(0);
+  }
+  else
+  {
+    motorL->setSpeed((int)(leftWheelOutput * 10.0));
+    motorR->setSpeed((int)(rightWheelOutput * 10.0));
+  }
 }
 
 
@@ -126,20 +142,18 @@ class SpeedSensorReadTimerAdapter : public TimerAdapter
   void timeExpired()
   {
     readSpeedSensors();
-    controlSpeed();
+    processStateControl();
   }
 };
 
 void selectMode();
-void speedControl();
-void updateActors();
+void speedSetPointControl();
 
-class SpeedCtrlTimerAdapter : public TimerAdapter
+class SpeedSetPointCtrlTimerAdapter : public TimerAdapter
 {
   void timeExpired()
   {
-    speedControl();
-    updateActors();
+    speedSetPointControl();
   }
 };
 
@@ -209,8 +223,8 @@ void setup()
   leftWheelOutput = 0;
   rightWheelOutput = 0;
 
-  leftWheelSetPoint = 15;
-  rightWheelSetPoint = 15;
+  leftWheelSetPoint = 0;
+  rightWheelSetPoint = 0;
 
   ultrasonicSensorFront = new UltrasonicSensorHCSR04(triggerPin, echoPin);
 
@@ -229,7 +243,7 @@ void setup()
 
   displayTimer = new Timer(new DisplayTimerAdapter(), Timer::IS_RECURRING, 200);
 
-  //speedCtrlTimer = new Timer(new SpeedCtrlTimerAdapter(), Timer::IS_RECURRING, 200);
+  speedSetPointCtrlTimer = new Timer(new SpeedSetPointCtrlTimerAdapter(), Timer::IS_RECURRING, 200);
 
   displayBlanking = new Blanking();
 
@@ -284,7 +298,7 @@ void selectMode()
   }
 }
 
-void speedControl()
+void speedSetPointControl()
 {
   if (0 != ultrasonicSensorFront)
   {
@@ -292,7 +306,7 @@ void speedControl()
   }
   isObstacleDetected = isFwd && (dist > 0) && (dist < 15);
 
-  if (lcdKeypad.isRightKey() || isObstacleDetected)
+  if (lcdKeypad.isRightKey() || isObstacleDetected || (battVoltage < BATT_WARN_THRSHD))
   {
     isRunning = false;
   }
@@ -303,60 +317,11 @@ void speedControl()
 
   if (isRunning)
   {
-    speed_value_motor = 255;
-//    if ((speed_value_motor == 255))
-//    {
-//      isSpeedIncreasing = false;
-//    }
-//    else if (speed_value_motor == 0)
-//    {
-//      isSpeedIncreasing = true;
-//      isFwd = !isFwd;
-//    }
-//
-//    int speedDelta = 50;
-//
-//    if (isSpeedIncreasing)
-//    {
-//      if (speed_value_motor <= (255 - speedDelta))
-//      {
-//        speed_value_motor += speedDelta;
-//      }
-//      else if (speed_value_motor < 255)
-//      {
-//        speed_value_motor++;
-//      }
-//    }
-//    else
-//    {
-//      if ((speed_value_motor >= speedDelta))
-//      {
-//        speed_value_motor -= speedDelta;
-//      }
-//      else if (speed_value_motor > 0)
-//      {
-//        speed_value_motor--;
-//      }
-//    }
+    driveSrtaitSpeedSetPoint = RUNNING_SPEED;
   }
   else
   {
-    speed_value_motor = 0;
-//    if (speed_value_motor > 0)
-//    {
-//      if (isObstacleDetected)
-//      {
-//        speed_value_motor = 0;
-//      }
-//      else if (speed_value_motor > 10)
-//      {
-//        speed_value_motor -= 10;
-//      }
-//      else
-//      {
-//        speed_value_motor--;
-//      }
-//    }
+    driveSrtaitSpeedSetPoint = 0;
   }
 }
 
@@ -422,20 +387,19 @@ void updateDisplay()
       lcdKeypad.print("[V]");
     }
 
+
+    int lWSpd = static_cast<int>(leftWheelSpeed);
+    int rWspd = static_cast<int>(rightWheelSpeed);
+
     lcdKeypad.setCursor(0, 1);
     lcdKeypad.print("v ");
     lcdKeypad.print("l:");
-    lcdKeypad.print(leftWheelSpeed > 999 ? "" : leftWheelSpeed > 99 ? " " : leftWheelSpeed > 9 ? "  " : "   ");
-    lcdKeypad.print(leftWheelSpeed);
+    lcdKeypad.print(lWSpd > 99 ? "" : lWSpd > 9 ? " " : "  ");
+    lcdKeypad.print(lWSpd);
     lcdKeypad.print(" r:");
-    lcdKeypad.print(rightWheelSpeed > 999 ? "" : rightWheelSpeed > 99 ? " " : rightWheelSpeed > 9 ? "  " : "   ");
-    lcdKeypad.print(rightWheelSpeed);
+    lcdKeypad.print(rWspd > 99 ? "" : rWspd > 9 ? " " : "  ");
+    lcdKeypad.print(rWspd);
   }
-}
-
-void updateActors()
-{
-
 }
 
 // The loop function is called in an endless loop
