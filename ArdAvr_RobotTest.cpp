@@ -15,6 +15,10 @@
 #include <avr/power.h>
 #include <avr/sleep.h>
 
+class DistanceCount;
+DistanceCount* lDistCount = 0;
+DistanceCount* rDistCount = 0;
+
 LcdKeypad lcdKeypad;
 MotorPWM*         motorL;
 MotorPWM*         motorR;
@@ -42,7 +46,6 @@ int motor4APin = 49;
 
 // value for motor speed
 int speed_value_motor = 0;
-bool isSpeedIncreasing = true;
 bool isFwd = true;
 bool isObstacleDetected = false;
 
@@ -80,15 +83,53 @@ const int R_SPEED_SENS_IRQ = IRQ_PIN_21;
 volatile unsigned long int speedSensorCountLeft  = 0;
 volatile unsigned long int speedSensorCountRight = 0;
 
+
 volatile long int leftWheelSpeed  = 0;
 volatile long int rightWheelSpeed = 0;
+
+class DistanceCount
+{
+public:
+  DistanceCount()
+  : m_cumulativeDistanceCount(0)
+  { };
+
+  void reset()
+  {
+    m_cumulativeDistanceCount = 0;
+  };
+
+  void add(unsigned long int delta)
+  {
+    m_cumulativeDistanceCount += delta;
+  }
+
+  unsigned long int cumulativeDistanceCount()
+  {
+    return m_cumulativeDistanceCount;
+  }
+
+private:
+  unsigned long int m_cumulativeDistanceCount;
+};
 
 void readSpeedSensors()
 {
   noInterrupts();
-  rightWheelSpeed = speedSensorCountRight; speedSensorCountRight = 0;
+
   leftWheelSpeed  = speedSensorCountLeft;  speedSensorCountLeft  = 0;
+  rightWheelSpeed = speedSensorCountRight; speedSensorCountRight = 0;
+
+  lDistCount->add(leftWheelSpeed);
+  rDistCount->add(rightWheelSpeed);
+
   interrupts();
+
+  Serial.print(millis());
+  Serial.print(" d l:");
+  Serial.print(lDistCount->cumulativeDistanceCount(),   10);
+  Serial.print(" r:");
+  Serial.println(rDistCount->cumulativeDistanceCount(), 10);
 }
 
 class SpeedSensorReadTimerAdapter : public TimerAdapter
@@ -173,7 +214,12 @@ void countRightSpeedSensor()
 //The setup function is called once at startup of the sketch
 void setup()
 {
+  Serial.begin(115200);
+
   ultrasonicSensorFront = new UltrasonicSensorHCSR04(triggerPin, echoPin);
+
+  lDistCount = new DistanceCount();
+  rDistCount = new DistanceCount();
 
   speedSensorReadTimer  = new Timer(new SpeedSensorReadTimerAdapter(), Timer::IS_RECURRING, SPEED_SENSORS_READ_TIMER_INTVL_MILLIS);
 
@@ -247,71 +293,24 @@ void speedControl()
   }
   isObstacleDetected = isFwd && (dist > 0) && (dist < 15);
 
-  if (lcdKeypad.isRightKey() || isObstacleDetected)
+  if (lcdKeypad.isRightKey() || isObstacleDetected || (battVoltage < BATT_WARN_THRSHD))
   {
     isRunning = false;
   }
   else if (lcdKeypad.isLeftKey() && !isIvmAccessMode)
   {
     isRunning = true;
+    lDistCount->reset();
+    rDistCount->reset();
   }
 
   if (isRunning)
   {
     speed_value_motor = 255;
-//    if ((speed_value_motor == 255))
-//    {
-//      isSpeedIncreasing = false;
-//    }
-//    else if (speed_value_motor == 0)
-//    {
-//      isSpeedIncreasing = true;
-//      isFwd = !isFwd;
-//    }
-//
-//    int speedDelta = 50;
-//
-//    if (isSpeedIncreasing)
-//    {
-//      if (speed_value_motor <= (255 - speedDelta))
-//      {
-//        speed_value_motor += speedDelta;
-//      }
-//      else if (speed_value_motor < 255)
-//      {
-//        speed_value_motor++;
-//      }
-//    }
-//    else
-//    {
-//      if ((speed_value_motor >= speedDelta))
-//      {
-//        speed_value_motor -= speedDelta;
-//      }
-//      else if (speed_value_motor > 0)
-//      {
-//        speed_value_motor--;
-//      }
-//    }
   }
   else
   {
     speed_value_motor = 0;
-//    if (speed_value_motor > 0)
-//    {
-//      if (isObstacleDetected)
-//      {
-//        speed_value_motor = 0;
-//      }
-//      else if (speed_value_motor > 10)
-//      {
-//        speed_value_motor -= 10;
-//      }
-//      else
-//      {
-//        speed_value_motor--;
-//      }
-//    }
   }
 }
 
@@ -377,14 +376,18 @@ void updateDisplay()
       lcdKeypad.print("[V]");
     }
 
+
+    int lWSpd = static_cast<int>(leftWheelSpeed);
+    int rWspd = static_cast<int>(rightWheelSpeed);
+
     lcdKeypad.setCursor(0, 1);
     lcdKeypad.print("v ");
     lcdKeypad.print("l:");
-    lcdKeypad.print(leftWheelSpeed > 999 ? "" : leftWheelSpeed > 99 ? " " : leftWheelSpeed > 9 ? "  " : "   ");
-    lcdKeypad.print(leftWheelSpeed);
+    lcdKeypad.print(lWSpd > 99 ? "" : lWSpd > 9 ? " " : "  ");
+    lcdKeypad.print(lWSpd);
     lcdKeypad.print(" r:");
-    lcdKeypad.print(rightWheelSpeed > 999 ? "" : rightWheelSpeed > 99 ? " " : rightWheelSpeed > 9 ? "  " : "   ");
-    lcdKeypad.print(rightWheelSpeed);
+    lcdKeypad.print(rWspd > 99 ? "" : rWspd > 9 ? " " : "  ");
+    lcdKeypad.print(rWspd);
   }
 }
 
@@ -392,10 +395,8 @@ void updateActors()
 {
   int speedAndDirection = speed_value_motor * (isFwd ? 1 : -1);
 
-  long int deltaSpeed = rightWheelSpeed - leftWheelSpeed;
-
-  motorL->setSpeed(speedAndDirection + deltaSpeed/5);
-  motorR->setSpeed(speedAndDirection - deltaSpeed/5);
+  motorL->setSpeed(speedAndDirection);
+  motorR->setSpeed(speedAndDirection);
 }
 
 // The loop function is called in an endless loop
