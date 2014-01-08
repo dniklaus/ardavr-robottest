@@ -30,6 +30,8 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/NewPing}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Blanking}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/EEPROM}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/aJson}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/aJson/utility}&quot;"/>
 								</option>
 								<inputType id="it.baeyens.arduino.compiler.cpp.sketch.input.247096431" name="CPP source files" superClass="it.baeyens.arduino.compiler.cpp.sketch.input"/>
 							</tool>
@@ -46,6 +48,8 @@
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/NewPing}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Blanking}&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/EEPROM}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/aJson}&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${workspace_loc:/ArdAvr_RobotTest/Libraries/aJson/utility}&quot;"/>
 								</option>
 								<inputType id="it.baeyens.arduino.compiler.c.sketch.input.157527183" name="C Source Files" superClass="it.baeyens.arduino.compiler.c.sketch.input"/>
 							</tool>

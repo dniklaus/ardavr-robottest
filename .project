@@ -72,6 +72,11 @@
 			<locationURI>ArduinoLibPath/NewPing</locationURI>
 		</link>
 		<link>
+			<name>Libraries/aJson</name>
+			<type>2</type>
+			<locationURI>ArduinoLibPath/aJson</locationURI>
+		</link>
+		<link>
 			<name>arduino/core</name>
 			<type>2</type>
 			<locationURI>ArduinoPlatformPath/cores/arduino</locationURI>

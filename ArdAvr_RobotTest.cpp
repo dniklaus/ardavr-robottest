@@ -12,8 +12,12 @@
 #include "UltrasonicSensorHCSR04.h"
 #include "EEPROM.h"
 
+#include <aJSON.h>
+
 #include <avr/power.h>
 #include <avr/sleep.h>
+
+aJsonStream serial_stream(&Serial);
 
 class DistanceCount;
 DistanceCount* lDistCount = 0;
@@ -124,12 +128,6 @@ void readSpeedSensors()
   rDistCount->add(rightWheelSpeed);
 
   interrupts();
-
-  Serial.print(millis());
-  Serial.print(" d l:");
-  Serial.print(lDistCount->cumulativeDistanceCount(),   10);
-  Serial.print(" r:");
-  Serial.println(rDistCount->cumulativeDistanceCount(), 10);
 }
 
 class SpeedSensorReadTimerAdapter : public TimerAdapter
@@ -399,9 +397,102 @@ void updateActors()
   motorR->setSpeed(speedAndDirection);
 }
 
+/* Process message like: {"straight":{"distance": 10,"topspeed": 100},"turn":{"angle": 45},"emergencyStop":{"stop":false}}*/
+void processLintillaMessageReceived(aJsonObject *msg)
+{
+//  bool emergencyStopValue = false;
+//  int topspeed = 0;
+//  int distanceValue = 0;
+//  int angleValue = 0;
+  double batteryVoltage = 0.0;
+
+  /* Lintilla Command List Example
+  {
+      "commands": [
+          {
+              "straight": {
+                  "distance": 10,
+                  "topspeed": 100
+              }
+          },
+          {
+              "turn": {
+                  "angle": 45
+              }
+          },
+          {
+              "straight": {
+                  "distance": 20,
+                  "topspeed": 50
+              }
+          },
+          {
+              "emergencyStop": null
+          },
+          {
+              "readVoltage": null
+          }
+      ]
+  }
+  */
+
+  aJsonObject* commands = aJson.getObjectItem(msg, "commands");
+  if (!commands)
+  {
+    Serial.println("NO commands");
+  }
+  else
+  {
+    Serial.println("commands");
+
+    aJsonObject* aCommand = commands->child;
+    while (0 != aCommand)
+    {
+      aJsonObject* readVoltageCmd = aJson.getObjectItem(aCommand, "readVoltage");
+      if (0 != readVoltageCmd)
+      {
+        batteryVoltage = battVoltage;
+
+        aJsonObject* readVoltageMsgRoot = aJson.createObject();
+        aJsonObject* readVoltageMsgElem = aJson.createObject();
+
+        aJson.addItemToObject(readVoltageMsgRoot, "readVoltage", readVoltageMsgElem);
+        aJson.addNumberToObject(readVoltageMsgElem, "voltage", batteryVoltage);
+
+        aJson.print(readVoltageMsgRoot, &serial_stream);
+        Serial.println(); /* Add newline. */
+
+        aJson.deleteItem(readVoltageMsgElem);
+        aJson.deleteItem(readVoltageMsgRoot);
+      }
+
+      aJsonObject* straightCmd = aJson.getObjectItem(aCommand, "straight");
+      if (0 != straightCmd)
+      {
+        Serial.println("straight");
+      }
+
+      aCommand = aCommand->next;
+    }
+  }
+}
+
 // The loop function is called in an endless loop
 void loop()
 {
   TimerContext::instance()->handleTick();
   lcdBackLightControl();
+
+  if (serial_stream.available()) {
+    /* First, skip any accidental whitespace like newlines. */
+    serial_stream.skip();
+  }
+
+  if (serial_stream.available()) {
+    /* Something real on input, let's take a look. */
+    aJsonObject *msg = aJson.parse(&serial_stream);
+    processLintillaMessageReceived(msg);
+    aJson.deleteItem(msg);
+  }
+
 }
