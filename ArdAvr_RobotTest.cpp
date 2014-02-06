@@ -11,6 +11,10 @@
 #include "UltrasonicSensor.h"
 #include "UltrasonicSensorHCSR04.h"
 #include "EEPROM.h"
+#include "Ivm.h"
+#include "IF_IvmMemory.h"
+#include "IvmSerialEeprom.h"
+#include "LintillaIvm.h"
 
 #include <aJSON.h>
 
@@ -31,6 +35,7 @@ Timer*            speedSensorReadTimer;
 Timer*            displayTimer;
 Timer*            speedCtrlTimer;
 Blanking*         displayBlanking;
+Ivm*              ivm;
 
 bool isRunning = false;
 bool isIvmAccessMode = false;
@@ -54,7 +59,7 @@ bool isFwd = true;
 bool isObstacleDetected = false;
 
 // LCD Backlight Intensity
-int lcdBackLightIntensity = 100;
+bool isLcdBackLightOn   = true;
 
 // Ultrasonic Sensor
 unsigned int triggerPin  = 34;
@@ -62,16 +67,20 @@ unsigned int echoPin     = 36;
 unsigned long dist       = UltrasonicSensor::DISTANCE_LIMIT_EXCEEDED;   // [cm]
 
 // Battery Voltage Surveillance
-float    battVoltage     = 0;   // [100mv]
+float       battVoltage        = 0;   // [V]
 
-const int BATT_SENSE_PIN     = A9;
-const float BATT_WARN_THRSHD = 6.20;
+const int   BATT_SENSE_PIN     = A9;
+
+const float BATT_WARN_THRSHD   = 6.20;
+const float BATT_SHUT_THRSHD   = 6.00;
+
 const float BATT_SENS_FACTOR_1 = 2.0;
 const float BATT_SENS_FACTOR_2 = 2.450;
 const float BATT_SENS_FACTOR_3 = 2.530;
 const float BATT_SENS_FACTOR_4 = 2.000;
 const float BATT_SENS_FACTOR_5 = 2.456;
-float BATT_SENS_FACTOR = 2.0;
+
+float       BATT_SENS_FACTOR   = 2.0;
 
 // Wheel Speed Sensors
 const unsigned int SPEED_SENSORS_READ_TIMER_INTVL_MILLIS = 100;
@@ -141,6 +150,7 @@ class SpeedSensorReadTimerAdapter : public TimerAdapter
 void selectMode();
 void speedControl();
 void updateActors();
+void lcdBackLightControl();
 
 class SpeedCtrlTimerAdapter : public TimerAdapter
 {
@@ -153,7 +163,7 @@ class SpeedCtrlTimerAdapter : public TimerAdapter
 
 void updateBattVoltageSenseFactor()
 {
-  unsigned char robotId = EEPROM.read(0);
+  unsigned char robotId = ivm->getDeviceId(); // EEPROM.read(0);
   switch (robotId)
   {
     case 1:
@@ -176,12 +186,65 @@ void updateBattVoltageSenseFactor()
   }
 }
 
+void sleepNow();
+
 void readBattVoltage()
 {
   unsigned int rawBattVoltage = analogRead(BATT_SENSE_PIN);
   battVoltage = rawBattVoltage * BATT_SENS_FACTOR * 5 / 1023;
+
+  if (BATT_WARN_THRSHD >= battVoltage)
+  {
+    isLcdBackLightOn = false;
+    lcdBackLightControl();
+  }
+
+  // emergency shutdown on battery low alarm
+  if (BATT_SHUT_THRSHD >= battVoltage)
+  {
+    sleepNow();
+  }
 }
 
+void sleepNow()
+{
+  /* Now is the time to set the sleep mode. In the Atmega8 datasheet
+   * http://www.atmel.com/dyn/resources/prod_documents/doc2486.pdf on page 35
+   * there is a list of sleep modes which explains which clocks and
+   * wake up sources are available in which sleep modus.
+   *
+   * In the avr/sleep.h file, the call names of these sleep modus are to be found:
+   *
+   * The 5 different modes are:
+   * SLEEP_MODE_IDLE -the least power savings
+   * SLEEP_MODE_ADC
+   * SLEEP_MODE_PWR_SAVE
+   * SLEEP_MODE_STANDBY
+   * SLEEP_MODE_PWR_DOWN -the most power savings
+   *
+   * the power reduction management <avr/power.h> is described in
+   * http://www.nongnu.org/avr-libc/user-manual/group__avr__power.html
+   */
+
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN); // sleep mode is set here
+
+  sleep_enable(); // enables the sleep bit in the mcucr register
+                  // so sleep is possible. just a safety pin
+  power_adc_disable();
+  power_spi_disable();
+  power_timer0_disable();
+  power_timer1_disable();
+  power_timer2_disable();
+  power_twi_disable();
+  sleep_mode(); // here the device is actually put to sleep!!
+
+  // THE PROGRAM CONTINUES FROM HERE AFTER WAKING UP
+
+  sleep_disable();  // first thing after waking from sleep:
+                    // disable sleep...
+
+  power_all_enable();
+}
 
 void updateDisplay();
 
@@ -214,6 +277,8 @@ void setup()
 {
   Serial.begin(115200);
 
+  ivm = new LintillaIvm();
+
   ultrasonicSensorFront = new UltrasonicSensorHCSR04(triggerPin, echoPin);
 
   lDistCount = new DistanceCount();
@@ -233,9 +298,9 @@ void setup()
 
   displayBlanking = new Blanking();
 
-  lcdKeypad.setBackLightIntensity(lcdBackLightIntensity);
-
   updateBattVoltageSenseFactor();
+
+  lcdBackLightControl();
 }
 
 void selectMode()
@@ -261,7 +326,7 @@ void selectMode()
 
     if (isIvmRobotIdEditMode)
     {
-      unsigned char robotId = EEPROM.read(0);
+      unsigned char robotId = ivm->getDeviceId();
 
       if (lcdKeypad.isSelectKey())
       {
@@ -270,13 +335,13 @@ void selectMode()
       if (lcdKeypad.isUpKey())
       {
         robotId++;
-        EEPROM.write(0, robotId);
+        ivm->setDeviceId(robotId);
         updateBattVoltageSenseFactor();
       }
       if (lcdKeypad.isDownKey())
       {
         robotId--;
-        EEPROM.write(0, robotId);
+        ivm->setDeviceId(robotId);
         updateBattVoltageSenseFactor();
       }
     }
@@ -314,26 +379,31 @@ void speedControl()
 
 void lcdBackLightControl()
 {
-  if (lcdKeypad.isUpKey() && (lcdBackLightIntensity < 255))
+  if (!isIvmAccessMode)
   {
-    lcdBackLightIntensity++;
+    if (lcdKeypad.isUpKey() && (!isLcdBackLightOn))
+    {
+      isLcdBackLightOn = true;
+    }
+    else if (lcdKeypad.isDownKey() && (isLcdBackLightOn))
+    {
+      isLcdBackLightOn = false;
+    }
   }
-  else if (lcdKeypad.isDownKey() && (lcdBackLightIntensity > 0))
-  {
-    lcdBackLightIntensity--;
-  }
-
-  lcdKeypad.setBackLightIntensity(lcdBackLightIntensity);
+  lcdKeypad.setBackLightOn(isLcdBackLightOn);
 }
 
 void updateDisplay()
 {
+  lcdBackLightControl();
+
   lcdKeypad.setCursor(0, 0);
 
   if (isIvmAccessMode)
   {
-    lcdKeypad.print("IVM Data");
-    lcdKeypad.print("        ");
+    lcdKeypad.print("IVM Data (V.");
+    lcdKeypad.print(ivm->getIvmVersion());
+    lcdKeypad.print(")     ");
 
     lcdKeypad.setCursor(0, 1);
 
@@ -345,7 +415,7 @@ void updateDisplay()
     }
     else
     {
-      lcdKeypad.print(EEPROM.read(0));
+      lcdKeypad.print(ivm->getDeviceId());
     }
     lcdKeypad.print("     ");
   }
@@ -437,7 +507,7 @@ void processLintillaMessageReceived(aJsonObject *msg)
   */
 
   aJsonObject* commands = aJson.getObjectItem(msg, "commands");
-  if (!commands)
+  if (0 == commands)
   {
     Serial.println("NO commands");
   }
@@ -465,12 +535,14 @@ void processLintillaMessageReceived(aJsonObject *msg)
         aJson.deleteItem(readVoltageMsgElem);
         aJson.deleteItem(readVoltageMsgRoot);
       }
+      aJson.deleteItem(readVoltageCmd);
 
       aJsonObject* straightCmd = aJson.getObjectItem(aCommand, "straight");
       if (0 != straightCmd)
       {
         Serial.println("straight");
       }
+      aJson.deleteItem(straightCmd);
 
       aCommand = aCommand->next;
     }
@@ -481,7 +553,6 @@ void processLintillaMessageReceived(aJsonObject *msg)
 void loop()
 {
   TimerContext::instance()->handleTick();
-  lcdBackLightControl();
 
   if (serial_stream.available()) {
     /* First, skip any accidental whitespace like newlines. */

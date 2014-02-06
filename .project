@@ -37,6 +37,11 @@
 			<locationURI>ArdAvr_RobotTestDebounce/Debounce</locationURI>
 		</link>
 		<link>
+			<name>IVM</name>
+			<type>2</type>
+			<locationURI>ArdAvr_RobotTestIVM/IVM</locationURI>
+		</link>
+		<link>
 			<name>LcdKeypad</name>
 			<type>2</type>
 			<locationURI>ArdAvr_RobotTestLcdKeypad/LcdKeypad</locationURI>
