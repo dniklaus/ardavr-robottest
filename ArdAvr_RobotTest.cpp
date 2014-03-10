@@ -21,6 +21,21 @@
 #include <avr/power.h>
 #include <avr/sleep.h>
 
+int getFreeRam(void)
+{
+  extern int  __bss_end;
+  extern int  *__brkval;
+  int free_memory;
+  if((int)__brkval == 0) {
+    free_memory = ((int)&free_memory) - ((int)&__bss_end);
+  }
+  else {
+    free_memory = ((int)&free_memory) - ((int)__brkval);
+  }
+
+  return free_memory;
+}
+
 aJsonStream serial_stream(&Serial);
 
 class DistanceCount;
@@ -90,8 +105,8 @@ const int IRQ_PIN_19 = 4;
 const int IRQ_PIN_20 = 3;
 const int IRQ_PIN_21 = 2;
 
-const int L_SPEED_SENS_IRQ = IRQ_PIN_20;
-const int R_SPEED_SENS_IRQ = IRQ_PIN_21;
+const int L_SPEED_SENS_IRQ = IRQ_PIN_18;
+const int R_SPEED_SENS_IRQ = IRQ_PIN_19;
 
 volatile unsigned long int speedSensorCountLeft  = 0;
 volatile unsigned long int speedSensorCountRight = 0;
@@ -276,6 +291,9 @@ void countRightSpeedSensor()
 void setup()
 {
   Serial.begin(115200);
+
+  Serial.println(F("Hello from Lintilla!\n"));
+  Serial.print("Free RAM: "); Serial.println(getFreeRam(), DEC);
 
   ivm = new LintillaIvm();
 
